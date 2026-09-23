@@ -28,7 +28,7 @@ export class ConsoleInput {
 
 export async function readTask(input) {
   const first = await input.question('\n  › ');
-  if (first.trim() === '/send') return '';
+  if (['/send', '/cancel'].includes(first.trim())) return '';
   if (first.startsWith('/') && first.trim() !== '/send') return first.trim();
   const lines = [first];
   while (true) {

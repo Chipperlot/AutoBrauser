@@ -20,5 +20,7 @@ test('control command cancels a pending question without becoming a prompt', asy
   input.control = null;
   stream.write('/back\n');
   assert.equal(await readTask(input), '/back');
+  stream.write('/cancel\n');
+  assert.equal(await readTask(input), '');
   input.close();
 });

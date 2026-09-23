@@ -253,6 +253,7 @@ async function chatMenu(input, chat, models, cli) {
         browsers.set(chat.id, browser);
         if (chat.lastUrl) await browser.open(chat.lastUrl).catch(() => {});
       }
+      browser.current();
       await browser.page.bringToFront(); continue;
     }
     if (task === '/history') { await showHistory(input, chat); continue; }
@@ -263,6 +264,7 @@ async function chatMenu(input, chat, models, cli) {
       if (model !== chat.model) { chat.model = model; chat.modelHistory.push(model); save(chat); }
       continue;
     }
+    if (task.startsWith('/')) { console.log(muted('  Неизвестная команда. /cancel — отменить ввод; /back — меню.')); continue; }
     if (!cli) { console.log(red('  Codex CLI не найден. Проверьте npm run doctor.')); await input.question(muted('  Enter — продолжить ')); continue; }
     if (await runTask(input, chat, task, cli)) return;
   }
