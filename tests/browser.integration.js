@@ -23,6 +23,9 @@ test('real browser: form, navigation, dynamic refs, confirmation, secret, persis
   try {
     await browser.start();
     let state = JSON.parse(await browser.open(origin));
+    assert.ok(state.items.every(item => !Object.values(item).includes('')));
+    const fullInput = [...browser.refs.values()].find(item => item.name === 'Project search');
+    assert.ok(Object.hasOwn(fullInput, 'autocomplete'), 'action validation retains full local metadata');
     const input = state.items.find(x => x.tag === 'input' && x.name === 'Project search');
     const search = state.items.find(x => x.tag === 'button' && x.name === 'Search projects');
     const shadow = state.items.find(x => x.placeholder === 'Shadow query');

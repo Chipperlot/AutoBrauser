@@ -96,9 +96,13 @@ export class BrowserController {
     while (JSON.stringify(data).length > 11200 && data.items.length > 8) data.items.pop();
     if (JSON.stringify(data).length > 11200) data.text = data.text.slice(0, 800);
     for (const item of data.items) this.refs.set(item.ref, item);
+    const rawChars = JSON.stringify(data).length;
+    // Keep full metadata locally for action validation, send only useful fields.
+    data.items = data.items.map(item => Object.fromEntries(Object.entries(item).filter(([key, value]) =>
+      value !== '' && !(['text', 'ariaLabel', 'context'].includes(key) && value === item.name))));
     const output = JSON.stringify(data);
     this.history.push({ url: data.url, title: data.title, count: data.items.length }); this.history = this.history.slice(-8);
-    this.trace('observe', { query, refs: data.items.length, pageItems: data.total, chars: output.length, url: data.url });
+    this.trace('observe', { query, refs: data.items.length, pageItems: data.total, chars: output.length, rawChars, url: data.url });
     return output;
   }
   async act(actions = []) {
