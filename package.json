@@ -1,0 +1,16 @@
+{
+  "name": "autobrauser",
+  "version": "4.0.0",
+  "private": true,
+  "description": "Terminal browser agent powered by Codex and visible Chrome",
+  "type": "module",
+  "repository": "https://github.com/Chipperlot/AutoBrauser.git",
+  "engines": { "node": ">=24" },
+  "dependencies": { "playwright-core": "1.62.1" },
+  "scripts": {
+    "start": "node src/cli.js",
+    "doctor": "node src/cli.js --doctor",
+    "test": "node --test tests/agent.test.js",
+    "test:browser": "node --test tests/browser.integration.js"
+  }
+}

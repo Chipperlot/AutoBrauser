@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+vendor/
+coverage/
+dist/
+
+# Local browser sessions and test runs
+profile/
+chats/
+runs/
+.tmp-*/
+
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
