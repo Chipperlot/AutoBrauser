@@ -37,7 +37,10 @@ export class BrowserController {
     this.trace('browser', { headed: this.headed, profile: this.profile, executable: this.executable });
     return this;
   }
-  current() { return this.page.url(); }
+  current() {
+    if (this.page.isClosed()) this.page = this.context.pages().at(-1) || this.page;
+    return this.page.url();
+  }
   async open(url) {
     const href = safeUrl(url, this.allowLocal);
     await this.page.goto(href, { waitUntil: 'domcontentloaded', timeout: 35000 });
@@ -101,12 +104,14 @@ export class BrowserController {
   async act(actions = []) {
     if (!Array.isArray(actions) || actions.length < 1 || actions.length > 6) throw new Error('От 1 до 6 действий в одном вызове');
     for (const [i, a] of actions.entries()) {
+      if (this.stopped) return 'HUMAN_REQUIRED: Остановлено пользователем.';
       if (!['click', 'fill', 'press', 'select', 'check', 'scroll', 'back'].includes(a.type)) throw new Error(`Неизвестное действие ${a.type}`);
       if ((['click', 'fill', 'select', 'check'].includes(a.type) || a.type === 'press' && a.ref) && !this.refs.has(a.ref)) throw new Error(`Ссылка ${a.ref} устарела. Сначала browser_observe.`);
       const info = this.refs.get(a.ref) || {};
       const risk = actionRisk(a, info);
       if (risk === 'manual') return 'HUMAN_REQUIRED: секретное поле вводит пользователь в видимом браузере; затем повторите browser_observe.';
       if (risk === 'confirm' && !await this.confirm(`Подтвердить ${a.type} «${info.name || info.text}» на ${this.current()}?`)) return 'HUMAN_REQUIRED: действие отклонено пользователем.';
+      if (this.stopped) return 'HUMAN_REQUIRED: Остановлено пользователем.';
       const before = this.current();
       this.trace('action', { type: a.type, ref: a.ref, target: info.name, risk, index: i + 1 });
       try {

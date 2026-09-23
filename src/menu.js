@@ -1,5 +1,5 @@
 import path from 'node:path';
-import readline from 'node:readline/promises';
+import { ConsoleInput, readTask } from './input.js';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, appendFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { findCodexCli, listModels } from './environment.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dataDir = path.join(root, 'chats');
+const browsers = new Map();
 const color = (r, g, b, text) => process.stdout.isTTY && !process.env.NO_COLOR ? `\x1b[38;2;${r};${g};${b}m${text}\x1b[0m` : text;
 const lime = text => color(182, 246, 111, text);
 const cyan = text => color(111, 219, 213, text);
@@ -44,6 +45,7 @@ function loadChats() {
     if (!entry.isDirectory() || !/^[a-f\d-]{36}$/.test(entry.name)) continue;
     try {
       const chat = JSON.parse(readFileSync(path.join(folder(entry.name), 'state.json'), 'utf8'));
+      chat.keepBrowser ??= true;
       if (chat.status === 'running') { chat.status = 'paused'; save(chat); }
       chats.push(chat);
     } catch { /* Ignore incomplete chat folders. */ }
@@ -53,7 +55,7 @@ function loadChats() {
 function createChat(model) {
   const now = new Date().toISOString();
   const chat = { id: randomUUID(), title: 'Новый чат', model, modelHistory: [model], threadId: '', status: 'idle',
-    createdAt: now, updatedAt: now, messages: [], toolCount: 0, lastUrl: '' };
+    createdAt: now, updatedAt: now, messages: [], toolCount: 0, lastUrl: '', keepBrowser: true };
   save(chat);
   return chat;
 }
@@ -164,14 +166,28 @@ async function runTask(input, chat, task, cli) {
   chat.status = 'running'; save(chat);
   clear(); logo(); headline(`LIVE RUN · ${modelName(chat.model)} · ${short(chat.title, 34)}`);
   console.log(muted(`  Задача: ${short(task, 64)}\n`));
-  let browser;
+  let browser, agent, stopped = false;
+  input.control = line => {
+    if (line.trim() !== '/stop') return false;
+    stopped = true; input.cancel(); agent?.stop();
+    if (browser) browser.stopped = true;
+    console.log(violet('\n  Останавливаю задачу…'));
+    return true;
+  };
+  console.log(muted('  /stop + Enter или Ctrl+C — остановить и выйти в меню'));
   try {
-    browser = await new BrowserController({ profile: path.join(folder(chat.id), 'profile'),
+    browser = browsers.get(chat.id);
+    if (!browser?.context?.pages().length) browser = await new BrowserController({ profile: path.join(folder(chat.id), 'profile'),
       trace: (type, data) => record(chat, type, data),
       confirm: async message => /^да$/i.test((await input.question(red(`\n  ${message}\n  Напишите «да» для выполнения › `))).trim()),
     }).start();
-    const agent = new Agent({ browser, cli, model: chat.model, threadId: chat.threadId, persistent: true,
-      resumeUrl: chat.lastUrl,
+    browsers.set(chat.id, browser);
+    browser.trace = (type, data) => record(chat, type, data);
+    browser.confirm = async message => /^да$/i.test((await input.question(message + ' Напишите «да» › ')).trim());
+    browser.stopped = stopped;
+    if (stopped) throw new Error('Остановлено пользователем');
+    agent = new Agent({ browser, cli, model: chat.model, threadId: chat.threadId, persistent: true,
+      resumeUrl: browser.current() !== 'about:blank' ? browser.current() : chat.lastUrl,
       onThread: id => { chat.threadId = id; save(chat); },
       trace: (type, data) => record(chat, type, data),
       manual: async reason => {
@@ -187,10 +203,16 @@ async function runTask(input, chat, task, cli) {
     wrapped(outcome.answer || 'Нет результата.').forEach((line, i) => console.log(`  ${i === 0 ? outcome.status === 'done' ? lime('●') : violet('●') : ' '} ${bright(line)}`));
     console.log(muted(`\n  ${callsText(outcome.calls)} · ${(outcome.durationMs / 1000).toFixed(1)} с · ${short(chat.lastUrl || 'нет URL', 55)}`));
   } catch (error) {
-    chat.status = 'error';
+    chat.status = stopped ? 'paused' : 'error';
     chat.messages.push({ role: 'assistant', text: `Ошибка: ${error.message}`, at: new Date().toISOString() });
     record(chat, 'error', { message: error.message });
-  } finally { await browser?.close().catch(() => {}); save(chat); }
+  } finally {
+    input.control = null;
+    if (browser && !browser.page?.isClosed()) chat.lastUrl = browser.current();
+    if (!chat.keepBrowser) { await browser?.close().catch(() => {}); browsers.delete(chat.id); }
+    save(chat);
+  }
+  if (stopped) return true;
   await input.question(muted('\n  Enter — вернуться в чат '));
 }
 async function chatMenu(input, chat, models, cli) {
@@ -205,10 +227,34 @@ async function chatMenu(input, chat, models, cli) {
       if (message.calls) console.log(muted(`         ${callsText(message.calls)} инструментов · ${(message.durationMs / 1000).toFixed(1)} с`));
     }
     if (!chat.messages.length) console.log(muted('  История пуста. Отправьте первую задачу.'));
-    console.log(muted('\n  Задача или команда: /history · /model · /tools · /log · /back'));
-    const task = (await input.question(lime('\n  › '))).trim();
+    console.log(cyan('  [' + (chat.keepBrowser ? '✓' : ' ') + '] Оставлять Chrome открытым · /keep · /browser — открыть окно'));
+    console.log(muted('  Вставьте текст; /send на отдельной строке — отправить, /cancel — отменить'));
+    console.log(muted('  /history · /model · /tools · /log · /back'));
+    const task = await readTask(input);
     if (!task) continue;
-    if (task === '/back') return;
+    if (task === '/back') {
+      const browser = browsers.get(chat.id);
+      if (browser?.context?.pages().length) { chat.lastUrl = browser.current(); save(chat); }
+      return;
+    }
+    if (task === '/keep') {
+      chat.keepBrowser = !chat.keepBrowser; save(chat);
+      if (!chat.keepBrowser) {
+        const browser = browsers.get(chat.id);
+        if (browser?.context?.pages().length) { chat.lastUrl = browser.current(); save(chat); }
+        await browser?.close(); browsers.delete(chat.id);
+      }
+      continue;
+    }
+    if (task === '/browser') {
+      let browser = browsers.get(chat.id);
+      if (!browser?.context?.pages().length) {
+        browser = await new BrowserController({ profile: path.join(folder(chat.id), 'profile') }).start();
+        browsers.set(chat.id, browser);
+        if (chat.lastUrl) await browser.open(chat.lastUrl).catch(() => {});
+      }
+      await browser.page.bringToFront(); continue;
+    }
     if (task === '/history') { await showHistory(input, chat); continue; }
     if (task === '/log') { await showLog(input, chat); continue; }
     if (task === '/tools') { await showTools(input, chat); continue; }
@@ -218,12 +264,12 @@ async function chatMenu(input, chat, models, cli) {
       continue;
     }
     if (!cli) { console.log(red('  Codex CLI не найден. Проверьте npm run doctor.')); await input.question(muted('  Enter — продолжить ')); continue; }
-    await runTask(input, chat, task, cli);
+    if (await runTask(input, chat, task, cli)) return;
   }
 }
 
 export async function runMenu() {
-  const input = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const input = new ConsoleInput();
   const cli = findCodexCli();
   let models = [];
   if (cli) { try { models = await listModels(cli); } catch (error) { console.log(red(`Каталог моделей: ${error.message}`)); } }
@@ -263,5 +309,13 @@ export async function runMenu() {
       const index = Number(choice) - 1;
       if (Number.isInteger(index) && index >= 0 && index < visible.length) await chatMenu(input, visible[index], models, cli);
     }
-  } finally { input.close(); }
+  } finally {
+    input.close();
+    for (const chat of chats) {
+      const browser = browsers.get(chat.id);
+      if (browser?.context?.pages().length) { chat.lastUrl = browser.current(); save(chat); }
+    }
+    await Promise.allSettled([...browsers.values()].map(browser => browser.close()));
+    browsers.clear();
+  }
 }

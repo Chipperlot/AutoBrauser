@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/cli.js",
     "doctor": "node src/cli.js --doctor",
-    "test": "node --test tests/agent.test.js",
+    "test": "node --test tests/agent.test.js tests/input.test.js",
     "test:browser": "node --test tests/browser.integration.js"
   }
 }

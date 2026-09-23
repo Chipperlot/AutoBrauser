@@ -22,6 +22,7 @@ export class Agent {
     this.maxMinutes = maxMinutes; this.manual = manual; this.calls = 0; this.queue = Promise.resolve(); this.status = 'running'; this.lastObservation = ''; this.repeats = new Map();
   }
   async call(name, args = {}) {
+    if (this.stopped) return result('Остановлено пользователем.', false);
     if (++this.calls > this.maxCalls || Date.now() - this.start > this.maxMinutes * 60000) {
       this.status = 'paused'; return result('Бюджет достигнут. Прогресс сохранён в профиле браузера.', false);
     }
@@ -43,6 +44,7 @@ export class Agent {
       else if (name === 'complete') {
         if (!args.evidence) return result('Нужно короткое доказательство из страницы.', false);
         const fresh = await this.browser.observe({ query: args.evidence });
+        if (this.stopped) return result('Остановлено пользователем.', false);
         if (!fresh.toLocaleLowerCase().includes(args.evidence.toLocaleLowerCase())) return result('evidence не найден дословно. Возьми 2–5 подряд идущих слов из свежего снимка без многоточия и пояснений.', false);
         this.lastObservation = fresh;
         this.status = 'done'; this.answer = args.result; output = 'Результат сохранён.';
@@ -56,6 +58,12 @@ export class Agent {
       this.trace('result', { name, chars: output.length, preview: output.slice(0, 250) });
       return result(output);
     } catch (e) { this.trace('error', { name, message: e.message }); return result(`${e.message}. Получи свежий browser_observe.`, false); }
+  }
+  stop() {
+    this.stopped = true;
+    this.status = 'paused'; this.answer = 'Остановлено пользователем.';
+    this.browser.stopped = true;
+    this.rpc?.close();
   }
   async run(task) {
     this.start = Date.now();
@@ -81,7 +89,7 @@ export class Agent {
       const url = startingUrl(task, this.resumeUrl);
       if (url === 'https://www.bing.com/') this.trace('search', { url, reason: 'Точный адрес не указан: поиск сайта через Bing' });
       let first = '';
-      if (url) { try { first = await this.browser.open(url); this.lastObservation = first; } catch (e) { first = `Первое открытие не удалось: ${e.message}`; } }
+      if (url) { try { first = this.browser.current() === url ? await this.browser.observe() : await this.browser.open(url); this.lastObservation = first; } catch (e) { first = `Первое открытие не удалось: ${e.message}`; } }
       let prompt = `Задача пользователя: ${task}\n${first ? `Текущая страница: ${first}` : 'Начни с browser_open поисковика и найди целевой сайт через результаты поиска.'}`;
       for (let turn = 0; turn < 3 && this.status === 'running'; turn++) {
         const completed = new Promise((resolve, reject) => { this.finish = resolve; this.fail = reject; }); completed.catch(() => {});
@@ -94,6 +102,10 @@ export class Agent {
       }
       if (this.status === 'running') { this.status = 'paused'; this.answer = 'Модель завершилась без подтверждённого результата.'; }
       return { status: this.status, answer: this.answer, calls: this.calls, durationMs: Date.now() - this.start };
+    } catch (error) {
+      if (!this.stopped) throw error;
+      await this.queue;
+      return { status: 'paused', answer: 'Остановлено пользователем.', calls: this.calls, durationMs: Date.now() - this.start };
     } finally { this.rpc.close(); }
   }
   onMessage(message) {

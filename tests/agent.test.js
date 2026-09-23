@@ -41,3 +41,16 @@ test('runner refuses stale completion and enforces budget', async () => {
   assert.equal(agent.status, 'done');
   assert.equal((await agent.call('browser_observe', {})).success, false);
 });
+
+test('stop prevents queued actions and a late completion from reporting success', async () => {
+  let resolveObservation, acted = false, closed = false;
+  const browser = { observe: () => new Promise(resolve => { resolveObservation = resolve; }), act: () => { acted = true; } };
+  const agent = new Agent({ browser, cli: {} }); agent.start = Date.now();
+  agent.rpc = { close: () => { closed = true; } };
+  const completion = agent.call('complete', { evidence: 'Done', result: 'Done' });
+  agent.stop(); resolveObservation('{"text":"Done"}');
+  assert.equal((await completion).success, false);
+  assert.equal((await agent.call('browser_act', { actions: [{ type: 'click', ref: '@1' }] })).success, false);
+  assert.equal(acted, false); assert.equal(closed, true);
+  assert.equal(agent.status, 'paused');
+});
